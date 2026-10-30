@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Repo Dashboard - Nur Heute</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0b0e14;--card:#161b26;--border:#232938;--text:#e2e8f0;--muted:#94a3b8;--green:#22c55e;--yellow:#eab308;--red:#ef4444;--gold:#f59e0b;--blue:#3b82f6}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;margin:0;padding:20px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--muted);font-size:14px;margin:0 0 18px}
+#controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:var(--card);padding:14px;border-radius:12px;border:1px solid var(--border);margin-bottom:14px}
+input{background:#0b0e14;border:1px solid #2d3748;color:var(--text);padding:9px 12px;border-radius:8px;font-size:14px}
+input#username{width:200px} input#token{width:280px} input#search{width:200px}
+button{background:var(--blue);color:white;border:none;padding:9px 16px;border-radius:8px;cursor:pointer;font-weight:600}
+button:hover{background:#2563eb} button.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+#stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.stat{background:var(--card);border:1px solid var(--border);padding:10px 14px;border-radius:10px;font-size:13px}
+.stat b{font-size:18px;display:block}
+#status{color:var(--muted);font-size:13px;margin-bottom:12px}
+#legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:14px}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:4px}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;position:relative;transition:.15s}
+.card.ori{border-color:var(--gold);box-shadow:0 0 0 1px rgba(245,158,11,.3) inset}
+.card.today{border-color:var(--blue)}
+.card:hover{transform:translateY(-2px);border-color:var(--blue)}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.name{font-weight:700;font-size:15px;word-break:break-all}
+.square{width:18px;height:18px;border-radius:5px;cursor:pointer;flex-shrink:0;border:1px solid rgba(255,255,255,.1)}
+.badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.badge{font-size:10px;padding:3px 7px;border-radius:20px;background:#0b0e14;border:1px solid var(--border);color:var(--muted)}
+.badge.ori{background:rgba(245,158,11,.15);color:var(--gold);border-color:rgba(245,158,11,.3)}
+.badge.today{background:rgba(59,130,246,.15);color:#7dd3fc;border-color:rgba(59,130,246,.3)}
+.meta{color:var(--muted);font-size:12px;margin-top:8px;line-height:1.5}
+a{color:#7dd3fc;text-decoration:none}
+a:hover{text-decoration:underline}
+.empty{padding:40px;text-align:center;color:var(--muted);border:1px dashed var(--border);border-radius:12px}
+</style>
+</head>
+<body>
+<h1>Repo Dashboard – Nur Heute bearbeitet</h1>
+<p class="sub">Zeigt nur Repos die heute gepusht wurden (Europe/Berlin) – direkt von GitHub API, ohne Server. Klick auf Farbe = manuell überschreiben (localStorage).</p>
+<div id="controls">
+<input id="username" placeholder="GitHub User" value="iki1uc">
+<input id="token" placeholder="Token (optional für private Repos)" type="password">
+<input id="search" placeholder="Suche (Taste / )">
+<button onclick="loadRepos()">Heute laden</button>
+<button class="ghost" onclick="exportCSV()">CSV Export</button>
+</div>
+<div id="stats"></div>
+<div id="status"></div>
+<div id="legend">
+<span><span class="dot" style="background:#22c55e"></span>Grün=aktiv</span>
+<span><span class="dot" style="background:#eab308"></span>Gelb=Issues</span>
+<span><span class="dot" style="background:#ef4444"></span>Rot=inaktiv</span>
+<span><span class="dot" style="background:#f59e0b"></span>Gold=ORI (wichtigster Ort)</span>
+<span><span class="dot" style="background:#3b82f6"></span>Blau=Heute</span>
+</div>
+<div id="grid"></div>
+<script>
+const statusEl=document.getElementById('status');
+const gridEl=document.getElementById('grid');
+const statsEl=document.getElementById('stats');
+const searchEl=document.getElementById('search');
+let allTodayRepos=[];
+function getOverrides(){try{return JSON.parse(localStorage.getItem('repo-overrides-today')||'{}')}catch{return{}}}
+function saveOverride(fullName,color){const o=getOverrides();o[fullName]=color;localStorage.setItem('repo-overrides-today',JSON.stringify(o))}
+function autoColor(r){
+  const months=(Date.now()-new Date(r.pushed_at))/ (1000*60*60*24*30);
+  if(months>6) return '#ef4444';
+  if(r.open_issues_count>0) return '#eab308';
+  return '#22c55e';
+}
+function cycle(c){const arr=['#22c55e','#eab308','#ef4444','#f59e0b'];const i=arr.indexOf(c);return arr[(i+1)%arr.length]}
+function isToday(dateStr){
+  const d=new Date(dateStr);
+  const berlin=new Date(d.toLocaleString('en-US',{timeZone:'Europe/Berlin'}));
+  const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Europe/Berlin'}));
+  return berlin.getDate()===today.getDate() && berlin.getMonth()===today.getMonth() && berlin.getFullYear()===today.getFullYear();
+}
+async function loadRepos(){
+  const user=document.getElementById('username').value.trim();
+  const token=document.getElementById('token').value.trim();
+  const q=searchEl.value.toLowerCase();
+  if(!user){statusEl.textContent='Bitte Username eingeben';return}
+  statusEl.textContent='Lade von GitHub...';
+  gridEl.innerHTML='';
+  statsEl.innerHTML='';
+  localStorage.setItem('gh-user',user);
+  if(token) localStorage.setItem('gh-token',token);
+  const headers={'Accept':'application/vnd.github+json'};
+  if(token) headers['Authorization']='Bearer '+token;
+  let repos=[]; let page=1;
+  try{
+    while(true){
+      const url= token
+        ? `https://api.github.com/user/repos?per_page=100&page=${page}&affiliation=owner&sort=pushed`
+        : `https://api.github.com/users/${user}/repos?per_page=100&page=${page}&sort=pushed`;
+      const res=await fetch(url,{headers});
+      if(!res.ok){
+        const txt=await res.text();
+        if(res.status===403 && txt.includes('rate limit')) throw new Error('Rate Limit erreicht - Token eingeben hilft');
+        throw new Error(`GitHub ${res.status}: ${txt.slice(0,180)}`);
+      }
+      const data=await res.json();
+      repos=repos.concat(data);
+      if(data.length<100) break;
+      page++; if(page>15) break;
+    }
+  }catch(e){statusEl.textContent='Fehler: '+e.message; return;}
+  const todayRepos=repos.filter(r=>isToday(r.pushed_at));
+  allTodayRepos=todayRepos;
+  const oriCount=todayRepos.filter(r=>r.name.toLowerCase().includes('ori')).length;
+  const overrides=getOverrides();
+  statsEl.innerHTML=`
+    <div class="stat"><b>${repos.length}</b>Gesamt Repos</div>
+    <div class="stat" style="border-color:#3b82f6"><b>${todayRepos.length}</b>Heute bearbeitet</div>
+    <div class="stat" style="border-color:#f59e0b"><b>${oriCount}</b>ORI heute</div>
+    <div class="stat"><b>${todayRepos.filter(r=>(overrides[r.full_name]||autoColor(r))==='#22c55e').length}</b>Grün</div>
+    <div class="stat"><b>${todayRepos.filter(r=>(overrides[r.full_name]||autoColor(r))==='#eab308').length}</b>Gelb</div>
+    <div class="stat"><b>${todayRepos.filter(r=>(overrides[r.full_name]||autoColor(r))==='#ef4444').length}</b>Rot</div>
+  `;
+  statusEl.textContent = todayRepos.length ? `${todayRepos.length} Repos heute bearbeitet - ${new Date().toLocaleDateString('de-DE')} (Berlin)` : `Keine Repos heute bearbeitet. Gesamt ${repos.length} Repos geprüft.`;
+  render(todayRepos);
+}
+function render(list){
+  const q=searchEl.value.toLowerCase();
+  const overrides=getOverrides();
+  let filtered=list.filter(r=> !q || r.name.toLowerCase().includes(q) || (r.description||'').toLowerCase().includes(q));
+  filtered.sort((a,b)=> new Date(b.pushed_at)-new Date(a.pushed_at));
+  if(filtered.length===0){
+    gridEl.innerHTML=`<div class="empty">Keine Repos für "heute" gefunden.<br><br>Entweder heute nichts gepusht oder Filter zu streng.<br>Alle Repos: Ändere im Code isToday Filter temporär auf false um alles zu sehen.</div>`;
+    return;
+  }
+  gridEl.innerHTML='';
+  filtered.forEach(r=>{
+    const baseColor=overrides[r.full_name]||autoColor(r);
+    const isOri=r.name.toLowerCase().includes('ori');
+    const card=document.createElement('div');
+    card.className='card today'+(isOri?' ori':'');
+    const pushTime=new Date(r.pushed_at).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',timeZone:'Europe/Berlin'});
+    const pushDate=new Date(r.pushed_at).toLocaleDateString('de-DE',{timeZone:'Europe/Berlin'});
+    card.innerHTML=`
+      <div class="top">
+        <div class="name">${r.name}</div>
+        <div class="square" style="background:${baseColor}" title="Klick = Farbe wechseln"></div>
+      </div>
+      <div class="badges">
+        <span class="badge today">HEUTE ${pushTime}</span>
+        ${isOri?'<span class="badge ori">ORI - wichtigster Ort</span>':''}
+        ${r.language?`<span class="badge">${r.language}</span>`:''}
+        ${r.private?'<span class="badge">privat</span>':''}
+        ${r.fork?'<span class="badge">fork</span>':''}
+      </div>
+      <div class="meta">
+        ${r.description?r.description+'<br>':''}
+        Push: ${pushDate} ${pushTime}<br>
+        Issues: ${r.open_issues_count} · ★ ${r.stargazers_count} · ${Math.round(r.size)} KB<br>
+        <a href="${r.html_url}" target="_blank">auf GitHub öffnen</a>
+      </div>
+    `;
+    const sq=card.querySelector('.square');
+    sq.addEventListener('click',()=>{const nc=cycle(baseColor);sq.style.background=nc;saveOverride(r.full_name,nc)});
+    gridEl.appendChild(card);
+  });
+}
+function exportCSV(){
+  if(allTodayRepos.length===0){alert('Erst laden');return}
+  const rows=[['name','url','pushed_at','language','issues','stars','size','ori'].join(',')];
+  allTodayRepos.forEach(r=>{
+    rows.push([r.name,r.html_url,r.pushed_at,r.language||'',r.open_issues_count,r.stargazers_count,r.size,r.name.toLowerCase().includes('ori')].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+  });
+  const blob=new Blob([rows.join('\n')],{type:'text/csv'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`github-heute-${new Date().toISOString().slice(0,10)}.csv`;a.click();
+}
+document.getElementById('search').addEventListener('input',()=>{if(allTodayRepos.length) render(allTodayRepos)});
+document.addEventListener('keydown',e=>{if(e.key==='/'){e.preventDefault();searchEl.focus()}});
+(function init(){
+  const su=localStorage.getItem('gh-user'); if(su) document.getElementById('username').value=su;
+  const st=localStorage.getItem('gh-token'); if(st) document.getElementById('token').value=st;
+  loadRepos();
+})();
+</script>
+</body>
+</html>
